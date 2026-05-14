@@ -361,23 +361,9 @@ module applicationInsights 'br/public:avm/res/insights/component:0.7.1' = if (en
 }
 
 // ========== Token Usage Workbook ========== //
-// Provisions the "Token Usage" Application Insights workbook that visualises
-// LLM_Token_Usage_Summary / LLM_Agent_Token_Usage / LLM_Model_Token_Usage
-// custom events emitted by the orchestrator.
-// Template lives in infra/dashboards/token-usage-workbook.json.
-resource tokenUsageWorkbook 'Microsoft.Insights/workbooks@2023-06-01' = if (enableMonitoring) {
-  name: guid(resourceGroup().id, applicationInsightsResourceName, 'token-usage')
-  location: solutionLocation
-  tags: tags
-  kind: 'shared'
-  properties: {
-    displayName: 'Token Usage'
-    category: 'workbook'
-    sourceId: applicationInsights!.outputs.resourceId
-    version: 'Notebook/1.0'
-    serializedData: loadTextContent('dashboards/token-usage-workbook.json')
-  }
-}
+// The "Token Usage" Application Insights workbook is now deployed separately
+// via infra/workbook/workbook.bicep so it can target an Application Insights
+// resource in any resource group / subscription. See infra/workbook/README.md.
 
 // ========== User Assigned Identity ========== //
 var userAssignedIdentityResourceName = 'id-${solutionSuffix}'
