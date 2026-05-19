@@ -55,7 +55,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents\n| where name == 'LLM_Token_Usage_Summary'\n| extend total_tokens = toint(customDimensions['total_tokens'])\n| extend input_tokens = toint(customDimensions['total_input_tokens'])\n| extend output_tokens = toint(customDimensions['total_output_tokens'])\n| summarize TotalTokens = sum(total_tokens), InputTokens = sum(input_tokens), OutputTokens = sum(output_tokens) by bin(timestamp, 1h)\n| render timechart",
+        "query": "let _range = totimespan('{TimeRange:duration}');\nlet _bin = iff(_range > 1d, 1d, 1h);\ncustomEvents\n| where name == 'LLM_Token_Usage_Summary'\n| extend total_tokens = toint(customDimensions['total_tokens'])\n| extend input_tokens = toint(customDimensions['total_input_tokens'])\n| extend output_tokens = toint(customDimensions['total_output_tokens'])\n| summarize TotalTokens = sum(total_tokens), InputTokens = sum(input_tokens), OutputTokens = sum(output_tokens) by bin(timestamp, _bin)\n| render timechart",
         "size": 0,
         "title": "Token usage over time",
         "timeContextFromParameter": "TimeRange",
@@ -129,7 +129,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents\n| where name == 'LLM_Token_Usage_Summary'\n| extend user_id = tostring(customDimensions['user_id'])\n| extend total_tokens = toint(customDimensions['total_tokens'])\n| where isnotempty(user_id)\n| summarize Requests = count(), TotalTokens = sum(total_tokens) by User = user_id\n| order by TotalTokens desc\n| take 25",
+        "query": "customEvents\n| where name == 'LLM_Token_Usage_Summary'\n| extend user_id = tostring(customDimensions['user_id'])\n| extend total_tokens = toint(customDimensions['total_tokens'])\n| extend User = iff(isempty(user_id) or user_id == 'anonymous', 'anonymous', user_id)\n| summarize Requests = count(), TotalTokens = sum(total_tokens) by User\n| order by TotalTokens desc\n| take 25",
         "size": 0,
         "title": "Top users by token consumption",
         "timeContextFromParameter": "TimeRange",
@@ -144,7 +144,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "customEvents\n| where name == 'LLM_Agent_Token_Usage'\n| extend agent = tostring(customDimensions['agent_name'])\n| extend total_tokens = toint(customDimensions['total_tokens'])\n| summarize TotalTokens = sum(total_tokens) by bin(timestamp, 1h), agent\n| render timechart",
+        "query": "let _range = totimespan('{TimeRange:duration}');\nlet _bin = iff(_range > 1d, 1d, 1h);\ncustomEvents\n| where name == 'LLM_Agent_Token_Usage'\n| extend agent = tostring(customDimensions['agent_name'])\n| extend total_tokens = toint(customDimensions['total_tokens'])\n| summarize TotalTokens = sum(total_tokens) by bin(timestamp, _bin), agent\n| render timechart",
         "size": 0,
         "title": "Per-agent token usage over time",
         "timeContextFromParameter": "TimeRange",

@@ -19,6 +19,7 @@ import base64
 import json
 import logging
 import re
+from contextvars import ContextVar
 from typing import AsyncIterator, Optional, cast
 
 from agent_framework import (
@@ -48,6 +49,12 @@ logger = logging.getLogger(__name__)
 
 # Token endpoint for Azure Cognitive Services (used for Azure OpenAI)
 TOKEN_ENDPOINT = "https://cognitiveservices.azure.com/.default"
+
+# Per-request user_id propagated to TokenUsageAccumulator instances created
+# anywhere inside the request (including deep workflow helpers like
+# ``_generate_foundry_image``). Set at the entry points of the public
+# orchestrator methods; read by ``_new_token_accumulator``.
+_current_user_id: ContextVar[str] = ContextVar("_current_user_id", default="")
 
 
 # Harmful content patterns to detect in USER INPUT before processing
@@ -713,11 +720,19 @@ class ContentGenerationOrchestrator:
 
         logger.info(f"Content Generation Orchestrator initialized successfully ({mode_str} mode)")
 
-    def _new_token_accumulator(self, conversation_id: str = "") -> TokenUsageAccumulator:
+    def _new_token_accumulator(
+        self, conversation_id: str = "", user_id: str = ""
+    ) -> TokenUsageAccumulator:
         """Create a TokenUsageAccumulator pre-populated with this orchestrator's
-        agent->model map and default chat model. Telemetry is best-effort."""
+        agent->model map and default chat model. Telemetry is best-effort.
+
+        If ``user_id`` is not provided, falls back to the per-request value
+        stored in the ``_current_user_id`` ContextVar so accumulators created
+        deep inside the workflow still carry the caller's user id.
+        """
         return TokenUsageAccumulator(
             conversation_id=conversation_id,
+            user_id=user_id or _current_user_id.get(""),
             agent_model_map=self._agent_model_map,
             default_model=self._default_model,
         )
@@ -726,7 +741,8 @@ class ContentGenerationOrchestrator:
         self,
         message: str,
         conversation_id: str,
-        context: Optional[dict] = None
+        context: Optional[dict] = None,
+        user_id: str = ""
     ) -> AsyncIterator[dict]:
         """
         Process a user message through the orchestrated workflow.
@@ -769,9 +785,10 @@ class ContentGenerationOrchestrator:
         if context:
             full_input = f"Context:\n{json.dumps(context, indent=2)}\n\nUser Message:\n{message}"
 
+        _ctx_token = _current_user_id.set(user_id or "")
         try:
             # Per-request token usage accumulator for App Insights telemetry.
-            token_acc = self._new_token_accumulator(conversation_id)
+            token_acc = self._new_token_accumulator(conversation_id, user_id)
 
             # Collect events from the workflow stream
             events = []
@@ -861,12 +878,15 @@ class ContentGenerationOrchestrator:
                 "is_final": True,
                 "metadata": {"conversation_id": conversation_id}
             }
+        finally:
+            _current_user_id.reset(_ctx_token)
 
     async def send_user_response(
         self,
         request_id: str,
         user_response: str,
-        conversation_id: str
+        conversation_id: str,
+        user_id: str = ""
     ) -> AsyncIterator[dict]:
         """
         Send a user response to a pending workflow request.
@@ -898,7 +918,8 @@ class ContentGenerationOrchestrator:
             return  # Exit immediately - do not continue workflow
 
         try:
-            token_acc = self._new_token_accumulator(conversation_id)
+            token_acc = self._new_token_accumulator(conversation_id, user_id)
+            _ctx_token = _current_user_id.set(user_id or "")
 
             responses = {request_id: user_response}
             async for event in self._workflow.send_responses_streaming(responses):
@@ -973,10 +994,16 @@ class ContentGenerationOrchestrator:
                 "is_final": True,
                 "metadata": {"conversation_id": conversation_id}
             }
+        finally:
+            try:
+                _current_user_id.reset(_ctx_token)
+            except (LookupError, ValueError, NameError):
+                pass
 
     async def parse_brief(
         self,
-        brief_text: str
+        brief_text: str,
+        user_id: str = ""
     ) -> tuple[CreativeBrief, str | None, bool]:
         """
         Parse a free-text creative brief into structured format.
@@ -994,6 +1021,17 @@ class ContentGenerationOrchestrator:
         if not self._initialized:
             self.initialize()
 
+        _ctx_token = _current_user_id.set(user_id or "")
+        try:
+            return await self._parse_brief_impl(brief_text, user_id)
+        finally:
+            _current_user_id.reset(_ctx_token)
+
+    async def _parse_brief_impl(
+        self,
+        brief_text: str,
+        user_id: str = ""
+    ) -> tuple[CreativeBrief, str | None, bool]:
         # PROACTIVE CONTENT SAFETY CHECK - Block harmful content at input layer
         is_harmful, matched_pattern = _check_input_for_harmful_content(brief_text)
         if is_harmful:
@@ -1013,7 +1051,7 @@ class ContentGenerationOrchestrator:
             return empty_brief, RAI_HARMFUL_CONTENT_RESPONSE, True
 
         # SECONDARY RAI CHECK - Use LLM-based classifier for comprehensive safety/scope validation
-        token_acc = self._new_token_accumulator()
+        token_acc = self._new_token_accumulator(user_id=user_id)
         try:
             rai_response = await self._rai_agent.run(brief_text)
             try:
@@ -1488,7 +1526,8 @@ Important:
         self,
         brief: CreativeBrief,
         products: list = None,
-        generate_images: bool = True
+        generate_images: bool = True,
+        user_id: str = ""
     ) -> dict:
         """
         Generate complete content package from a confirmed creative brief.
@@ -1497,6 +1536,7 @@ Important:
             brief: Confirmed creative brief
             products: List of products to feature
             generate_images: Whether to generate images
+            user_id: Optional caller's user id, propagated to token usage telemetry
 
         Returns:
             dict: Generated content with compliance results
@@ -1504,6 +1544,19 @@ Important:
         if not self._initialized:
             self.initialize()
 
+        _ctx_token = _current_user_id.set(user_id or "")
+        try:
+            return await self._generate_content_impl(brief, products, generate_images, user_id)
+        finally:
+            _current_user_id.reset(_ctx_token)
+
+    async def _generate_content_impl(
+        self,
+        brief: CreativeBrief,
+        products: list = None,
+        generate_images: bool = True,
+        user_id: str = ""
+    ) -> dict:
         results = {
             "text_content": None,
             "image_prompt": None,
@@ -1528,7 +1581,7 @@ Products to feature: {json.dumps(products or [])}
 """
 
         try:
-            token_acc = self._new_token_accumulator()
+            token_acc = self._new_token_accumulator(user_id=user_id)
             # Generate text content
             text_response = await self._agents["text_content"].run(text_request)
             try:
@@ -1745,7 +1798,8 @@ Check against brand guidelines and flag any issues.
         modification_request: str,
         brief: CreativeBrief,
         products: list = None,
-        previous_image_prompt: str = None
+        previous_image_prompt: str = None,
+        user_id: str = ""
     ) -> dict:
         """
         Regenerate just the image based on a user modification request.
@@ -1758,6 +1812,7 @@ Check against brand guidelines and flag any issues.
             brief: The confirmed creative brief
             products: List of products to feature
             previous_image_prompt: The previous image prompt (if available)
+            user_id: Optional caller's user id, propagated to token usage telemetry
 
         Returns:
             dict: Regenerated image with updated prompt
@@ -1765,6 +1820,21 @@ Check against brand guidelines and flag any issues.
         if not self._initialized:
             self.initialize()
 
+        _ctx_token = _current_user_id.set(user_id or "")
+        try:
+            return await self._regenerate_image_impl(
+                modification_request, brief, products, previous_image_prompt
+            )
+        finally:
+            _current_user_id.reset(_ctx_token)
+
+    async def _regenerate_image_impl(
+        self,
+        modification_request: str,
+        brief: CreativeBrief,
+        products: list = None,
+        previous_image_prompt: str = None
+    ) -> dict:
         logger.info(f"Regenerating image with modification: {modification_request[:100]}...")
 
         # PROACTIVE CONTENT SAFETY CHECK
