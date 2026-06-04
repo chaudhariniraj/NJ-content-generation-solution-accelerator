@@ -52,15 +52,15 @@ param secondaryLocation string = 'uksouth'
   'uksouth'
   'westus3'
 ])
-@metadata({
-  azd: {
-    type: 'location'
-    usageName: [
-      'OpenAI.GlobalStandard.gpt-5.1,150'
-      'OpenAI.GlobalStandard.gpt-image-1-mini,1'
-    ]
-  }
-})
+// @metadata({
+//   azd: {
+//     type: 'location'
+//     usageName: [
+//       'OpenAI.GlobalStandard.gpt-5.1,150'
+//       'OpenAI.GlobalStandard.gpt-image-1-mini,1'
+//     ]
+//   }
+// })
 @description('Required. Location for AI deployments.')
 param azureAiServiceLocation string
 
